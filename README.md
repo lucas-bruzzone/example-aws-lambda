@@ -1,32 +1,28 @@
-Este repositório contém um template simples para provisionamento de recursos AWS utilizando Terraform.
+# example-aws-lambda
 
-## Como usar
+Repositório base para infraestrutura Terraform
 
-1. Clone o repositório:
-    ```bash
-    git clone https://github.com/seu-usuario/example-aws-terraform-template.git
-    ```
-2. Configure suas credenciais AWS.
-3. Inicialize o Terraform:
-    ```bash
-    terraform init
-    ```
-4. Aplique a infraestrutura:
-    ```bash
-    terraform apply
-    ```
+## Configuração
+
+O repositório já está configurado com:
+- Workflow do GitHub Actions para deploy automático
+- Secret `AWS_ROLE_ARN` configurado
+- Estrutura base do Terraform
+
+## Deploy
+
+Deploy automático via GitHub Actions quando há push na branch main.
+
+Deploy manual:
+```bash
+cd terraform
+terraform init
+terraform plan -var-file="tfvars/devops.tfvars"
+terraform apply -var-file="tfvars/devops.tfvars"
+```
 
 ## Estrutura
 
-- `main.tf`: Definições principais dos recursos AWS.
-- `variables.tf`: Variáveis utilizadas no projeto.
-- `outputs.tf`: Saídas dos recursos provisionados.
-
-## Requisitos
-
-- [Terraform](https://www.terraform.io/downloads.html) instalado
-- Conta AWS válida
-
-## Licença
-
-Este projeto está sob a licença MIT.
+- `terraform/` - Arquivos Terraform
+- `.github/workflows/` - GitHub Actions
+- `tfvars/` - Arquivos de variáveis
