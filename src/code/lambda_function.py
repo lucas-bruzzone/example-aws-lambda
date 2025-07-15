@@ -723,13 +723,19 @@ def create_response(status_code: int, body: Dict[str, Any]) -> Dict[str, Any]:
     """
     Cria resposta HTTP padronizada
     """
-    return {
-        "statusCode": status_code,
-        "headers": {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token",
-            "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
+    
+    environment = os.environ.get('ENVIRONMENT', 'unknown')
+    
+    response = {
+        'statusCode': 200,
+        'headers': {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
+            'Access-Control-Allow-Methods': 'POST,OPTIONS'
         },
-        "body": json.dumps(body, ensure_ascii=False, default=str),
+        'body': json.dumps({
+            'message': 'Hello from Lambda!',
+            'environment': environment,
+            'event': event
+        })
     }
