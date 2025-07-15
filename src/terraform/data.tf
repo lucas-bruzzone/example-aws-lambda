@@ -7,3 +7,12 @@ data "terraform_remote_state" "network" {
     region = "us-east-1"
   }
 }
+
+data "terraform_remote_state" "dynamoDB" {
+  backend = "s3"
+  config = {
+    bucket = "example-aws-terraform-terraform-state"
+    key    = "example-aws-api-infra/terraform.tfstate"
+    region = "us-east-1"
+  }
+}

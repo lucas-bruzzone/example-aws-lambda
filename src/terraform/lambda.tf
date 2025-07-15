@@ -45,7 +45,7 @@ resource "aws_lambda_function" "lambda_function" {
 
   environment {
     variables = {
-      ENVIRONMENT = var.environment
+      PROPERTIES_TABLE = data.terraform_remote_state.dynamoDB.outputs.table_name
     }
   }
 }
