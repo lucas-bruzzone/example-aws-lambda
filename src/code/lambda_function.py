@@ -5,6 +5,7 @@ import os
 from datetime import datetime, timezone
 from typing import Dict, Any, List
 import logging
+from decimal import Decimal, InvalidOperation
 from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Key
 
@@ -94,8 +95,8 @@ def create_property(event: Dict[str, Any], user_id: str) -> Dict[str, Any]:
             "name": body["name"],
             "type": body.get("type", "fazenda"),
             "description": body.get("description", ""),
-            "area": body["area"],
-            "perimeter": body["perimeter"],
+            "area": Decimal(str(body["area"])),
+            "perimeter": Decimal(str(body["perimeter"])),
             "coordinates": body["coordinates"],
             "createdAt": current_time,
             "updatedAt": current_time,
@@ -373,7 +374,14 @@ def update_property_data(
         for field, attr_name in updatable_fields.items():
             if field in update_data:
                 update_expression_parts.append(f"{attr_name} = :{field}")
-                expression_attribute_values[f":{field}"] = update_data[field]
+
+                # Converter números para Decimal
+                if field in ["area", "perimeter"]:
+                    expression_attribute_values[f":{field}"] = Decimal(
+                        str(update_data[field])
+                    )
+                else:
+                    expression_attribute_values[f":{field}"] = update_data[field]
 
                 # Adicionar nome do atributo se necessário
                 if attr_name.startswith("#"):
@@ -452,8 +460,20 @@ def calculate_stats(properties: List[Dict[str, Any]]) -> Dict[str, Any]:
     Calcula estatísticas das propriedades
     """
     try:
-        total_area = sum(prop.get("area", 0) for prop in properties)
-        total_perimeter = sum(prop.get("perimeter", 0) for prop in properties)
+        # Usar Decimal para cálculos
+        total_area = Decimal("0")
+        total_perimeter = Decimal("0")
+
+        areas = []
+        for prop in properties:
+            area = Decimal(str(prop.get("area", 0)))
+            perimeter = Decimal(str(prop.get("perimeter", 0)))
+
+            total_area += area
+            total_perimeter += perimeter
+
+            if area > 0:
+                areas.append(area)
 
         # Contagem por tipo
         type_counts = {}
@@ -462,17 +482,19 @@ def calculate_stats(properties: List[Dict[str, Any]]) -> Dict[str, Any]:
             type_counts[prop_type] = type_counts.get(prop_type, 0) + 1
 
         # Propriedade maior e menor
-        areas = [prop.get("area", 0) for prop in properties if prop.get("area", 0) > 0]
-        largest_area = max(areas) if areas else 0
-        smallest_area = min(areas) if areas else 0
+        largest_area = max(areas) if areas else Decimal("0")
+        smallest_area = min(areas) if areas else Decimal("0")
+
+        # Média
+        average_area = total_area / len(properties) if properties else Decimal("0")
 
         return {
             "totalProperties": len(properties),
-            "totalArea": round(total_area, 2),
-            "totalPerimeter": round(total_perimeter, 2),
-            "averageArea": round(total_area / len(properties), 2) if properties else 0,
-            "largestProperty": largest_area,
-            "smallestProperty": smallest_area,
+            "totalArea": float(total_area),
+            "totalPerimeter": float(total_perimeter),
+            "averageArea": float(average_area),
+            "largestProperty": float(largest_area),
+            "smallestProperty": float(smallest_area),
             "typeDistribution": type_counts,
         }
 
@@ -524,7 +546,7 @@ def validate_property_data(data: Dict[str, Any]) -> Dict[str, Any]:
 
     # Validar área
     try:
-        area = float(data["area"])
+        area = Decimal(str(data["area"]))
         if area <= 0:
             return {"valid": False, "message": "Área deve ser maior que zero"}
         if area > 1000000:  # 1 milhão de hectares (limite razoável)
@@ -532,15 +554,15 @@ def validate_property_data(data: Dict[str, Any]) -> Dict[str, Any]:
                 "valid": False,
                 "message": "Área muito grande (máximo 1.000.000 hectares)",
             }
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, InvalidOperation):
         return {"valid": False, "message": "Área deve ser um número válido"}
 
     # Validar perímetro
     try:
-        perimeter = float(data["perimeter"])
+        perimeter = Decimal(str(data["perimeter"]))
         if perimeter <= 0:
             return {"valid": False, "message": "Perímetro deve ser maior que zero"}
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, InvalidOperation):
         return {"valid": False, "message": "Perímetro deve ser um número válido"}
 
     # Validar coordenadas (GeoJSON)
@@ -600,7 +622,7 @@ def validate_update_data(data: Dict[str, Any]) -> Dict[str, Any]:
     # Validar área se fornecida
     if "area" in data:
         try:
-            area = float(data["area"])
+            area = Decimal(str(data["area"]))
             if area <= 0:
                 return {"valid": False, "message": "Área deve ser maior que zero"}
             if area > 1000000:
@@ -608,16 +630,16 @@ def validate_update_data(data: Dict[str, Any]) -> Dict[str, Any]:
                     "valid": False,
                     "message": "Área muito grande (máximo 1.000.000 hectares)",
                 }
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, InvalidOperation):
             return {"valid": False, "message": "Área deve ser um número válido"}
 
     # Validar perímetro se fornecido
     if "perimeter" in data:
         try:
-            perimeter = float(data["perimeter"])
+            perimeter = Decimal(str(data["perimeter"]))
             if perimeter <= 0:
                 return {"valid": False, "message": "Perímetro deve ser maior que zero"}
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, InvalidOperation):
             return {"valid": False, "message": "Perímetro deve ser um número válido"}
 
     # Validar coordenadas se fornecidas
@@ -724,12 +746,12 @@ def create_response(status_code: int, body: Dict[str, Any]) -> Dict[str, Any]:
     Cria resposta HTTP padronizada
     """
     return {
-        'statusCode': status_code,
-        'headers': {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
-            'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
+        "statusCode": status_code,
+        "headers": {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token",
+            "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
         },
-        'body': json.dumps(body, ensure_ascii=False, default=str)
+        "body": json.dumps(body, ensure_ascii=False, default=str),
     }
