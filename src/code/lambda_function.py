@@ -282,7 +282,7 @@ def convert_coordinates_to_decimal(coordinates):
     """
     if not isinstance(coordinates, list):
         return coordinates
-    
+
     decimal_coordinates = []
     for coord in coordinates:
         if isinstance(coord, list) and len(coord) == 2:
@@ -290,7 +290,7 @@ def convert_coordinates_to_decimal(coordinates):
             decimal_coordinates.append(decimal_coord)
         else:
             decimal_coordinates.append(coord)
-    
+
     return decimal_coordinates
 
 
@@ -300,7 +300,7 @@ def convert_coordinates_to_float(coordinates):
     """
     if not isinstance(coordinates, list):
         return coordinates
-    
+
     float_coordinates = []
     for coord in coordinates:
         if isinstance(coord, list) and len(coord) == 2:
@@ -308,7 +308,7 @@ def convert_coordinates_to_float(coordinates):
             float_coordinates.append(float_coord)
         else:
             float_coordinates.append(coord)
-    
+
     return float_coordinates
 
 
@@ -399,7 +399,7 @@ def update_property_data(
 
         # Campos que podem ser atualizados
         updatable_fields = {
-            "name": "name",
+            "name": "#name",  # 'name' é palavra reservada no DynamoDB
             "type": "#type",  # 'type' é palavra reservada no DynamoDB
             "description": "description",
             "area": "area",
@@ -410,12 +410,16 @@ def update_property_data(
         for field, attr_name in updatable_fields.items():
             if field in update_data:
                 update_expression_parts.append(f"{attr_name} = :{field}")
-                
+
                 # Converter números para Decimal
                 if field in ["area", "perimeter"]:
-                    expression_attribute_values[f":{field}"] = Decimal(str(update_data[field]))
+                    expression_attribute_values[f":{field}"] = Decimal(
+                        str(update_data[field])
+                    )
                 elif field == "coordinates":
-                    expression_attribute_values[f":{field}"] = convert_coordinates_to_decimal(update_data[field])
+                    expression_attribute_values[f":{field}"] = (
+                        convert_coordinates_to_decimal(update_data[field])
+                    )
                 else:
                     expression_attribute_values[f":{field}"] = update_data[field]
 
@@ -497,17 +501,17 @@ def calculate_stats(properties: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     try:
         # Usar Decimal para cálculos
-        total_area = Decimal('0')
-        total_perimeter = Decimal('0')
-        
+        total_area = Decimal("0")
+        total_perimeter = Decimal("0")
+
         areas = []
         for prop in properties:
             area = Decimal(str(prop.get("area", 0)))
             perimeter = Decimal(str(prop.get("perimeter", 0)))
-            
+
             total_area += area
             total_perimeter += perimeter
-            
+
             if area > 0:
                 areas.append(area)
 
@@ -518,11 +522,11 @@ def calculate_stats(properties: List[Dict[str, Any]]) -> Dict[str, Any]:
             type_counts[prop_type] = type_counts.get(prop_type, 0) + 1
 
         # Propriedade maior e menor
-        largest_area = max(areas) if areas else Decimal('0')
-        smallest_area = min(areas) if areas else Decimal('0')
-        
+        largest_area = max(areas) if areas else Decimal("0")
+        smallest_area = min(areas) if areas else Decimal("0")
+
         # Média
-        average_area = total_area / len(properties) if properties else Decimal('0')
+        average_area = total_area / len(properties) if properties else Decimal("0")
 
         return {
             "totalProperties": len(properties),
@@ -550,7 +554,9 @@ def format_property_for_response(property_item: Dict[str, Any]) -> Dict[str, Any
         "description": property_item.get("description", ""),
         "area": float(property_item.get("area", 0)),
         "perimeter": float(property_item.get("perimeter", 0)),
-        "coordinates": convert_coordinates_to_float(property_item.get("coordinates", [])),
+        "coordinates": convert_coordinates_to_float(
+            property_item.get("coordinates", [])
+        ),
         "createdAt": property_item.get("createdAt"),
         "updatedAt": property_item.get("updatedAt"),
     }
@@ -782,12 +788,12 @@ def create_response(status_code: int, body: Dict[str, Any]) -> Dict[str, Any]:
     Cria resposta HTTP padronizada
     """
     return {
-        'statusCode': status_code,
-        'headers': {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
-            'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
+        "statusCode": status_code,
+        "headers": {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token",
+            "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
         },
-        'body': json.dumps(body, ensure_ascii=False, default=str)
+        "body": json.dumps(body, ensure_ascii=False, default=str),
     }
