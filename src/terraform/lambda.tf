@@ -11,9 +11,9 @@ module "lambda_function" {
   layers        = [module.lambda_layer.lambda_layer_arn]
   handler       = "lambda_function.lambda_handler"
   runtime       = "python3.13"
-  timeout       = 30     # Aumentado para geração de PDF
-  memory_size   = 256    # Aumentado para ReportLab
-  
+  timeout       = 30  # Aumentado para geração de PDF
+  memory_size   = 256 # Aumentado para ReportLab
+
   attach_policy = true
   policy        = aws_iam_policy.lambda_policy.arn
 
