@@ -45,9 +45,6 @@ module "lambda_layer" {
     }
   ]
 
-  # Força rebuild quando requirements.txt mudar
-  recreate_missing_package = true
-
   tags = {
     Name = "${var.project_name}-layer"
   }
