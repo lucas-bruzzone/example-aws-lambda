@@ -1,51 +1,53 @@
-# Lambda Layer (para requirements)
-resource "aws_lambda_layer_version" "requirements" {
-  count = fileexists("../requirements/requirements.txt") ? 1 : 0
+module "lambda_function" {
+  source  = "terraform-aws-modules/lambda/aws"
+  version = "~> 4.7"
 
-  filename            = data.archive_file.layer[0].output_path
-  layer_name          = "${var.project_name}-requirements"
-  compatible_runtimes = ["python3.13"]
-  source_code_hash    = data.archive_file.layer[0].output_base64sha256
-}
-
-# Archive para layer (requirements)
-data "archive_file" "layer" {
-  count = fileexists("../requirements/requirements.txt") ? 1 : 0
-
-  type        = "zip"
-  source_dir  = "../requirements"
-  output_path = "/tmp/${var.project_name}-layer.zip"
-}
-
-# Archive para código da Lambda
-data "archive_file" "lambda" {
-  type        = "zip"
-  source_dir  = "../code"
-  output_path = "/tmp/${var.project_name}-lambda.zip"
-}
-
-# Lambda Function
-resource "aws_lambda_function" "lambda_function" {
-  filename      = data.archive_file.lambda.output_path
-  function_name = "${var.project_name}-function"
-  role          = aws_iam_role.lambda.arn
+  function_name = "${var.project_name}-properties-${var.environment}"
+  source_path   = "../../code"
+  layers        = [module.lambda_layer.lambda_layer_arn]
   handler       = "lambda_function.lambda_handler"
   runtime       = "python3.13"
   timeout       = 30
-  memory_size   = 128
+  memory_size   = 256
 
-  source_code_hash = data.archive_file.lambda.output_base64sha256
+  # Usar seu role IAM existente
+  create_role = false
+  lambda_role = aws_iam_role.lambda.arn
 
-  vpc_config {
-    subnet_ids         = data.terraform_remote_state.network.outputs.public_subnet_ids
-    security_group_ids = [aws_security_group.lambda.id]
+  environment_variables = {
+    PROPERTIES_TABLE = data.terraform_remote_state.dynamoDB.outputs.table_name
+    ENVIRONMENT      = var.environment
   }
 
-  layers = fileexists("../requirements/requirements.txt") ? [aws_lambda_layer_version.requirements[0].arn] : []
+  depends_on = [module.lambda_layer]
 
-  environment {
-    variables = {
-      PROPERTIES_TABLE = data.terraform_remote_state.dynamoDB.outputs.table_name
+  tags = {
+    Name = "${var.project_name}-lambda"
+  }
+}
+
+module "lambda_layer" {
+  source  = "terraform-aws-modules/lambda/aws"
+  version = "~> 4.7"
+
+  create_function = false
+  create_layer    = true
+
+  layer_name          = "${var.project_name}-python-layer"
+  description         = "Python dependencies for ${var.project_name}"
+  compatible_runtimes = ["python3.13"]
+
+  source_path = [
+    {
+      path             = "../lambda-layer"
+      pip_requirements = true
+      prefix_in_zip    = "python"
     }
+  ]
+
+  store_on_s3 = false
+
+  tags = {
+    Name = "${var.project_name}-layer"
   }
 }
