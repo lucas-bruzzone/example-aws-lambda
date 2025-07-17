@@ -3,7 +3,7 @@ module "lambda_function" {
   version = "~> 4.7"
 
   function_name = "${var.project_name}-properties-${var.environment}"
-  source_path   = "../../code"
+  source_path   = "../code"
   layers        = [module.lambda_layer.lambda_layer_arn]
   handler       = "lambda_function.lambda_handler"
   runtime       = "python3.13"
