@@ -6,7 +6,7 @@ module "lambda_function" {
   source_path   = "../code"
   layers        = [module.lambda_layer.lambda_layer_arn]
   handler       = "lambda_function.lambda_handler"
-  runtime       = "python3.13"
+  runtime       = "python3.11"
   timeout       = 30
   memory_size   = 256
 
@@ -35,7 +35,7 @@ module "lambda_layer" {
 
   layer_name          = "${var.project_name}-python-layer"
   description         = "Python dependencies for ${var.project_name}"
-  compatible_runtimes = ["python3.13"]
+  compatible_runtimes = ["python3.11"]
 
   source_path = [
     {
