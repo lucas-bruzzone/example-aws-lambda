@@ -97,7 +97,7 @@ def create_property(event: Dict[str, Any], user_id: str) -> Dict[str, Any]:
             "description": body.get("description", ""),
             "area": Decimal(str(body["area"])),
             "perimeter": Decimal(str(body["perimeter"])),
-            "coordinates": body["coordinates"],
+            "coordinates": convert_coordinates_to_decimal(body["coordinates"]),
             "createdAt": current_time,
             "updatedAt": current_time,
         }
@@ -276,6 +276,42 @@ def delete_property(event: Dict[str, Any], user_id: str) -> Dict[str, Any]:
 # ============================================================================
 
 
+def convert_coordinates_to_decimal(coordinates):
+    """
+    Converte coordenadas para Decimal (compatível com DynamoDB)
+    """
+    if not isinstance(coordinates, list):
+        return coordinates
+
+    decimal_coordinates = []
+    for coord in coordinates:
+        if isinstance(coord, list) and len(coord) == 2:
+            decimal_coord = [Decimal(str(coord[0])), Decimal(str(coord[1]))]
+            decimal_coordinates.append(decimal_coord)
+        else:
+            decimal_coordinates.append(coord)
+
+    return decimal_coordinates
+
+
+def convert_coordinates_to_float(coordinates):
+    """
+    Converte coordenadas de Decimal para float (para resposta da API)
+    """
+    if not isinstance(coordinates, list):
+        return coordinates
+
+    float_coordinates = []
+    for coord in coordinates:
+        if isinstance(coord, list) and len(coord) == 2:
+            float_coord = [float(coord[0]), float(coord[1])]
+            float_coordinates.append(float_coord)
+        else:
+            float_coordinates.append(coord)
+
+    return float_coordinates
+
+
 def get_user_properties(
     user_id: str, property_type: str = None, limit: int = 50, last_key: str = None
 ) -> Dict[str, Any]:
@@ -363,7 +399,7 @@ def update_property_data(
 
         # Campos que podem ser atualizados
         updatable_fields = {
-            "name": "name",
+            "name": "#name",  # 'name' é palavra reservada no DynamoDB
             "type": "#type",  # 'type' é palavra reservada no DynamoDB
             "description": "description",
             "area": "area",
@@ -379,6 +415,10 @@ def update_property_data(
                 if field in ["area", "perimeter"]:
                     expression_attribute_values[f":{field}"] = Decimal(
                         str(update_data[field])
+                    )
+                elif field == "coordinates":
+                    expression_attribute_values[f":{field}"] = (
+                        convert_coordinates_to_decimal(update_data[field])
                     )
                 else:
                     expression_attribute_values[f":{field}"] = update_data[field]
@@ -514,7 +554,9 @@ def format_property_for_response(property_item: Dict[str, Any]) -> Dict[str, Any
         "description": property_item.get("description", ""),
         "area": float(property_item.get("area", 0)),
         "perimeter": float(property_item.get("perimeter", 0)),
-        "coordinates": property_item.get("coordinates", []),
+        "coordinates": convert_coordinates_to_float(
+            property_item.get("coordinates", [])
+        ),
         "createdAt": property_item.get("createdAt"),
         "updatedAt": property_item.get("updatedAt"),
     }
