@@ -39,7 +39,7 @@ module "lambda_layer" {
 
   source_path = [
     {
-      path             = "../../lambda-layer"
+      path             = "../lambda-layer"
       pip_requirements = true
       prefix_in_zip    = "python"
     }
