@@ -34,17 +34,17 @@ module "lambda_layer" {
   layer_name          = "${var.project_name}-python-layer"
   description         = "${var.project_name} python layer"
   compatible_runtimes = ["python3.11"]
-  runtime             = "python3.11"  # Adicionar esta linha
+  runtime             = "python3.11" # Adicionar esta linha
 
   source_path = [
     {
       path             = "../lambda-layer"
-      pip_requirements = true  # Mudança aqui - sem path
+      pip_requirements = true # Mudança aqui - sem path
       prefix_in_zip    = "python"
     }
   ]
 
-  store_on_s3 = false  # Adicionar esta linha
+  store_on_s3 = false # Adicionar esta linha
 
   tags = {
     Name = "${var.project_name}-layer"
