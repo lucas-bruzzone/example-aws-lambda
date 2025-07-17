@@ -1,24 +1,19 @@
 output "lambda_function_name" {
-  description = "Nome da função Lambda"
-  value       = aws_lambda_function.lambda_function.function_name
+  description = "Name of the Lambda function"
+  value       = module.lambda_function.lambda_function_name
 }
 
 output "lambda_function_arn" {
-  description = "ARN da função Lambda"
-  value       = aws_lambda_function.lambda_function.arn
+  description = "ARN of the Lambda function"
+  value       = module.lambda_function.lambda_function_arn
 }
 
 output "lambda_invoke_arn" {
-  description = "ARN de invocação da Lambda"
-  value       = aws_lambda_function.lambda_function.invoke_arn
+  description = "Invoke ARN of the Lambda function"
+  value       = module.lambda_function.lambda_function_invoke_arn
 }
 
-output "lambda_role_arn" {
-  description = "ARN da role da Lambda"
-  value       = aws_iam_role.lambda.arn
-}
-
-output "lambda_security_group_id" {
-  description = "ID do Security Group da Lambda"
-  value       = aws_security_group.lambda.id
+output "lambda_layer_arn" {
+  description = "ARN of the Lambda layer"
+  value       = module.lambda_layer.lambda_layer_arn
 }
