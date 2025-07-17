@@ -2,12 +2,19 @@ import json
 import boto3
 import uuid
 import os
+import base64
 from datetime import datetime, timezone
 from typing import Dict, Any, List
 import logging
 from decimal import Decimal, InvalidOperation
 from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Key
+from io import BytesIO
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.units import inch
 
 # Configurar logging
 logger = logging.getLogger()
@@ -39,7 +46,10 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             )
 
         # Router baseado no método HTTP e path
-        if method == "POST" and "/properties" in resource:
+        if method == "POST" and "/properties/report" in resource:
+            return generate_pdf_report(event, user_id)
+
+        elif method == "POST" and "/properties" in resource and "{id}" not in resource:
             return create_property(event, user_id)
 
         elif method == "GET" and "/properties" in resource and "{id}" not in resource:
@@ -63,6 +73,254 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Erro interno no router: {str(e)}")
         return create_response(500, {"error": "Erro interno do servidor"})
+
+
+def generate_pdf_report(event: Dict[str, Any], user_id: str) -> Dict[str, Any]:
+    """
+    Gera relatório PDF das propriedades selecionadas
+    """
+    try:
+        # Parse do body
+        try:
+            body = json.loads(event.get("body", "{}"))
+        except json.JSONDecodeError:
+            return create_response(400, {"error": "JSON inválido"})
+
+        property_ids = body.get("propertyIds", [])
+        if not property_ids:
+            return create_response(400, {"error": "Lista de propriedades é obrigatória"})
+
+        # Buscar propriedades do usuário
+        properties = []
+        for prop_id in property_ids:
+            prop = get_existing_property(user_id, prop_id)
+            if prop:
+                properties.append(format_property_for_response(prop))
+
+        if not properties:
+            return create_response(404, {"error": "Nenhuma propriedade encontrada"})
+
+        # Gerar PDF
+        pdf_result = create_pdf_report(properties, user_id)
+        
+        if pdf_result["success"]:
+            return create_response(200, {
+                "message": "Relatório gerado com sucesso",
+                "pdf": pdf_result["pdf_base64"],
+                "filename": pdf_result["filename"],
+                "properties_count": len(properties)
+            })
+        else:
+            return create_response(500, {"error": pdf_result["message"]})
+
+    except Exception as e:
+        logger.error(f"Erro ao gerar relatório: {str(e)}")
+        return create_response(500, {"error": "Erro ao gerar relatório PDF"})
+
+
+def create_pdf_report(properties: List[Dict[str, Any]], user_id: str) -> Dict[str, Any]:
+    """
+    Cria o PDF usando ReportLab
+    """
+    try:
+        # Buffer para o PDF
+        buffer = BytesIO()
+        
+        # Configurar documento
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=A4,
+            rightMargin=72,
+            leftMargin=72,
+            topMargin=72,
+            bottomMargin=18
+        )
+        
+        # Estilos
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=18,
+            spaceAfter=30,
+            textColor=colors.HexColor('#7c3aed'),
+            alignment=1  # Centralizado
+        )
+        
+        subtitle_style = ParagraphStyle(
+            'Subtitle',
+            parent=styles['Normal'],
+            fontSize=12,
+            spaceAfter=20,
+            textColor=colors.HexColor('#4b5563'),
+            alignment=1
+        )
+        
+        # Conteúdo do PDF
+        story = []
+        
+        # Título
+        story.append(Paragraph("Relatório de Propriedades Rurais", title_style))
+        
+        # Data
+        current_date = datetime.now(timezone.utc)
+        formatted_date = current_date.strftime("%d de %B de %Y às %H:%M UTC")
+        story.append(Paragraph(f"Gerado em: {formatted_date}", subtitle_style))
+        story.append(Spacer(1, 20))
+        
+        # Resumo executivo
+        story.append(Paragraph("<b>RESUMO EXECUTIVO</b>", styles['Heading2']))
+        story.append(Spacer(1, 12))
+        
+        total_area = sum(p.get('area', 0) for p in properties)
+        total_perimeter = sum(p.get('perimeter', 0) for p in properties)
+        avg_area = total_area / len(properties) if properties else 0
+        
+        summary_data = [
+            f"<b>Total de propriedades:</b> {len(properties)}",
+            f"<b>Área total:</b> {total_area:.2f} hectares",
+            f"<b>Perímetro total:</b> {total_perimeter/1000:.2f} km",
+            f"<b>Área média:</b> {avg_area:.2f} hectares por propriedade"
+        ]
+        
+        for item in summary_data:
+            story.append(Paragraph(f"• {item}", styles['Normal']))
+            story.append(Spacer(1, 6))
+        
+        story.append(Spacer(1, 20))
+        
+        # Distribuição por tipo
+        type_counts = {}
+        for prop in properties:
+            prop_type = prop.get('type', 'outros').capitalize()
+            type_counts[prop_type] = type_counts.get(prop_type, 0) + 1
+        
+        story.append(Paragraph("<b>DISTRIBUIÇÃO POR TIPO</b>", styles['Heading2']))
+        story.append(Spacer(1, 12))
+        
+        for prop_type, count in type_counts.items():
+            percentage = (count / len(properties)) * 100
+            story.append(Paragraph(f"• <b>{prop_type}:</b> {count} propriedade(s) ({percentage:.1f}%)", styles['Normal']))
+        
+        story.append(Spacer(1, 20))
+        
+        # Tabela de propriedades
+        story.append(Paragraph("<b>PROPRIEDADES DETALHADAS</b>", styles['Heading2']))
+        story.append(Spacer(1, 12))
+        
+        # Dados da tabela
+        table_data = [['Nome da Propriedade', 'Tipo', 'Área (ha)', 'Perímetro (m)', 'Data Criação']]
+        
+        for prop in properties:
+            created_date = prop.get('createdAt', '')
+            if created_date:
+                try:
+                    date_obj = datetime.fromisoformat(created_date.replace('Z', '+00:00'))
+                    formatted_created = date_obj.strftime('%d/%m/%Y')
+                except:
+                    formatted_created = 'N/A'
+            else:
+                formatted_created = 'N/A'
+                
+            # Truncar nome se muito longo
+            name = prop.get('name', '')
+            if len(name) > 30:
+                name = name[:27] + '...'
+                
+            table_data.append([
+                name,
+                prop.get('type', '').capitalize(),
+                f"{prop.get('area', 0):.2f}",
+                f"{prop.get('perimeter', 0):.0f}",
+                formatted_created
+            ])
+        
+        # Criar tabela
+        table = Table(table_data, colWidths=[2.5*inch, 1*inch, 0.8*inch, 1*inch, 1*inch])
+        table.setStyle(TableStyle([
+            # Header
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#7c3aed')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            
+            # Body
+            ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f9fafb')]),
+        ]))
+        
+        story.append(table)
+        
+        # Estatísticas adicionais
+        if len(properties) > 1:
+            story.append(Spacer(1, 30))
+            story.append(Paragraph("<b>ESTATÍSTICAS ADICIONAIS</b>", styles['Heading2']))
+            story.append(Spacer(1, 12))
+            
+            areas = [p.get('area', 0) for p in properties if p.get('area', 0) > 0]
+            if areas:
+                largest_area = max(areas)
+                smallest_area = min(areas)
+                
+                largest_prop = next(p for p in properties if p.get('area') == largest_area)
+                smallest_prop = next(p for p in properties if p.get('area') == smallest_area)
+                
+                stats_data = [
+                    f"• <b>Maior propriedade:</b> {largest_prop.get('name')} - {largest_area:.2f} ha",
+                    f"• <b>Menor propriedade:</b> {smallest_prop.get('name')} - {smallest_area:.2f} ha",
+                    f"• <b>Diferença:</b> {largest_area - smallest_area:.2f} ha"
+                ]
+                
+                for stat in stats_data:
+                    story.append(Paragraph(stat, styles['Normal']))
+                    story.append(Spacer(1, 6))
+        
+        # Rodapé informativo
+        story.append(Spacer(1, 30))
+        footer_style = ParagraphStyle(
+            'Footer',
+            parent=styles['Normal'],
+            fontSize=8,
+            textColor=colors.HexColor('#6b7280'),
+            alignment=1
+        )
+        story.append(Paragraph(
+            "Sistema Rural - Desenvolvido por Lucas Bruzzone, Cientista de Dados<br/>"
+            "Relatório gerado automaticamente via AWS Lambda", 
+            footer_style
+        ))
+        
+        # Construir PDF
+        doc.build(story)
+        
+        # Converter para base64
+        pdf_bytes = buffer.getvalue()
+        buffer.close()
+        
+        pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
+        
+        # Nome do arquivo
+        timestamp = current_date.strftime("%Y%m%d_%H%M%S")
+        filename = f"relatorio_propriedades_{timestamp}.pdf"
+        
+        return {
+            "success": True,
+            "pdf_base64": pdf_base64,
+            "filename": filename
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro ao criar PDF: {str(e)}")
+        return {
+            "success": False,
+            "message": f"Erro ao criar PDF: {str(e)}"
+        }
 
 
 def create_property(event: Dict[str, Any], user_id: str) -> Dict[str, Any]:
