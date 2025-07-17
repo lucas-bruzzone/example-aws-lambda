@@ -6,9 +6,9 @@ module "lambda_function" {
   source_path   = "../code"
   layers        = [module.lambda_layer.lambda_layer_arn]
   handler       = "lambda_function.lambda_handler"
-  runtime       = "python3.11"  # Mudança aqui - python3.13 pode ter problemas com algumas libs
+  runtime       = "python3.11" # Mudança aqui - python3.13 pode ter problemas com algumas libs
   timeout       = 30
-  memory_size   = 512  # Aumentar memória para processamento de PDF
+  memory_size   = 512 # Aumentar memória para processamento de PDF
 
   # Usar seu role IAM existente
   create_role = false
