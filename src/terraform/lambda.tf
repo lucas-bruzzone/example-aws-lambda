@@ -25,6 +25,7 @@ module "lambda_function" {
   }
 }
 
+
 module "lambda_layer" {
   source          = "terraform-aws-modules/lambda/aws"
   version         = "~> 4.7"
