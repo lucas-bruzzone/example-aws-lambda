@@ -40,7 +40,8 @@ module "lambda_layer" {
   source_path = [
     {
       path             = "../lambda-layer"
-      pip_requirements = "../lambda-layer/requirements.txt"
+      pip_requirements = true # Mudança aqui
+      pip_tmp_dir      = "/tmp/lambda-layer-build"
       prefix_in_zip    = "python"
     }
   ]
