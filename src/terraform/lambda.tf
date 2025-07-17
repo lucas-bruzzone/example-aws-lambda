@@ -6,9 +6,9 @@ module "lambda_function" {
   source_path   = "../code"
   layers        = [module.lambda_layer.lambda_layer_arn]
   handler       = "lambda_function.lambda_handler"
-  runtime       = "python3.11"
+  runtime       = "python3.11"  # Mudança aqui - python3.13 pode ter problemas com algumas libs
   timeout       = 30
-  memory_size   = 256
+  memory_size   = 512  # Aumentar memória para processamento de PDF
 
   # Usar seu role IAM existente
   create_role = false
@@ -40,12 +40,13 @@ module "lambda_layer" {
   source_path = [
     {
       path             = "../lambda-layer"
-      pip_requirements = true
+      pip_requirements = "../lambda-layer/requirements.txt"
       prefix_in_zip    = "python"
     }
   ]
 
-  store_on_s3 = false
+  # Força rebuild quando requirements.txt mudar
+  recreate_missing_package = true
 
   tags = {
     Name = "${var.project_name}-layer"
