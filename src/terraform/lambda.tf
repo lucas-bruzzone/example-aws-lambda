@@ -6,11 +6,10 @@ module "lambda_function" {
   source_path   = "../code"
   layers        = [module.lambda_layer.lambda_layer_arn]
   handler       = "lambda_function.lambda_handler"
-  runtime       = "python3.13"
+  runtime       = "python3.11"
   timeout       = 30
-  memory_size   = 256
+  memory_size   = 512
 
-  # Usar seu role IAM existente
   create_role = false
   lambda_role = aws_iam_role.lambda.arn
 
@@ -26,26 +25,27 @@ module "lambda_function" {
   }
 }
 
-module "lambda_layer" {
-  source  = "terraform-aws-modules/lambda/aws"
-  version = "~> 4.7"
 
+module "lambda_layer" {
+  source          = "terraform-aws-modules/lambda/aws"
+  version         = "~> 4.7"
   create_function = false
   create_layer    = true
 
   layer_name          = "${var.project_name}-python-layer"
-  description         = "Python dependencies for ${var.project_name}"
-  compatible_runtimes = ["python3.13"]
+  description         = "${var.project_name} python layer"
+  compatible_runtimes = ["python3.11"]
+  runtime             = "python3.11" # Adicionar esta linha
 
   source_path = [
     {
       path             = "../lambda-layer"
-      pip_requirements = true
+      pip_requirements = true # Mudança aqui - sem path
       prefix_in_zip    = "python"
     }
   ]
 
-  store_on_s3 = false
+  store_on_s3 = false # Adicionar esta linha
 
   tags = {
     Name = "${var.project_name}-layer"
