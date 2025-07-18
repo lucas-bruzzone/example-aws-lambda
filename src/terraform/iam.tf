@@ -45,7 +45,8 @@ resource "aws_iam_role_policy" "lambda_dynamodb" {
           "dynamodb:Query",
           "dynamodb:Scan"
         ]
-        Resource = data.terraform_remote_state.dynamoDB.outputs.table_arn
+        Resource = [data.terraform_remote_state.dynamoDB.outputs.table_arn,
+        data.terraform_remote_state.analysis_infra.outputs.property_analysis_table_arn]
       }
     ]
   })
