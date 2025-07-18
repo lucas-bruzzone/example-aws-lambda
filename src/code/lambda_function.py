@@ -50,6 +50,9 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         if method == "POST" and "/properties/report" in resource:
             return generate_pdf_report(event, user_id)
 
+        elif method == "POST" and "/properties/import" in resource:
+            return import_properties(event, user_id)
+
         elif method == "POST" and "/properties" in resource and "{id}" not in resource:
             return create_property(event, user_id)
 
@@ -76,6 +79,159 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         return create_response(500, {"error": "Erro interno do servidor"})
 
 
+def import_properties(event: Dict[str, Any], user_id: str) -> Dict[str, Any]:
+    """
+    Importa múltiplas propriedades via lista de dados
+    """
+    try:
+        # Parse do body
+        try:
+            body = json.loads(event.get("body", "{}"))
+        except json.JSONDecodeError:
+            return create_response(400, {"error": "JSON inválido"})
+
+        properties_data = body.get("properties", [])
+        if not properties_data:
+            return create_response(
+                400, {"error": "Lista de propriedades é obrigatória"}
+            )
+
+        if len(properties_data) > 100:
+            return create_response(
+                400, {"error": "Máximo 100 propriedades por importação"}
+            )
+
+        # Validar e processar propriedades
+        successful_imports = []
+        failed_imports = []
+        current_time = datetime.now(timezone.utc).isoformat()
+
+        # Preparar items para inserção em lote
+        items_to_insert = []
+
+        for i, property_data in enumerate(properties_data):
+            try:
+                # Validar dados da propriedade
+                validation_result = validate_property_data(property_data)
+                if not validation_result["valid"]:
+                    failed_imports.append(
+                        {
+                            "index": i + 1,
+                            "name": property_data.get("name", "Unnamed"),
+                            "error": validation_result["message"],
+                        }
+                    )
+                    continue
+
+                # Gerar ID único para a propriedade
+                property_id = f"prop_{uuid.uuid4().hex[:12]}"
+
+                # Preparar item para DynamoDB
+                property_item = {
+                    "userId": user_id,
+                    "propertyId": property_id,
+                    "name": property_data["name"],
+                    "type": property_data.get("type", "fazenda"),
+                    "description": property_data.get("description", ""),
+                    "area": Decimal(str(property_data["area"])),
+                    "perimeter": Decimal(str(property_data["perimeter"])),
+                    "coordinates": convert_coordinates_to_decimal(
+                        property_data["coordinates"]
+                    ),
+                    "createdAt": current_time,
+                    "updatedAt": current_time,
+                }
+
+                items_to_insert.append(property_item)
+                successful_imports.append(
+                    {"index": i + 1, "name": property_data["name"], "id": property_id}
+                )
+
+            except Exception as e:
+                failed_imports.append(
+                    {
+                        "index": i + 1,
+                        "name": property_data.get("name", "Unnamed"),
+                        "error": str(e),
+                    }
+                )
+
+        # Inserir propriedades em lotes usando batch_writer
+        if items_to_insert:
+            try:
+                insert_result = batch_insert_properties(items_to_insert)
+                if not insert_result["success"]:
+                    logger.error(
+                        f"Erro na inserção em lote: {insert_result['message']}"
+                    )
+                    # Se falhou a inserção em lote, tentar inserções individuais
+                    individual_result = insert_properties_individually(items_to_insert)
+                    successful_count = individual_result["successful"]
+                else:
+                    successful_count = len(items_to_insert)
+            except Exception as e:
+                logger.error(f"Erro na inserção de propriedades: {str(e)}")
+                return create_response(
+                    500, {"error": "Erro ao inserir propriedades no banco"}
+                )
+        else:
+            successful_count = 0
+
+        logger.info(
+            f"Importação concluída: {successful_count} sucessos, {len(failed_imports)} falhas"
+        )
+
+        return create_response(
+            200,
+            {
+                "message": "Importação processada",
+                "imported": successful_count,
+                "failed": len(failed_imports),
+                "total": len(properties_data),
+                "successful_imports": successful_imports,
+                "failed_imports": failed_imports[:10],  # Limitar erros retornados
+            },
+        )
+
+    except Exception as e:
+        logger.error(f"Erro na importação: {str(e)}")
+        return create_response(500, {"error": "Erro na importação de propriedades"})
+
+
+def batch_insert_properties(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Insere propriedades em lote usando batch_writer
+    """
+    try:
+        with table.batch_writer() as batch:
+            for item in items:
+                batch.put_item(Item=item)
+
+        return {"success": True, "message": f"{len(items)} propriedades inseridas"}
+
+    except Exception as e:
+        logger.error(f"Erro na inserção em lote: {str(e)}")
+        return {"success": False, "message": str(e)}
+
+
+def insert_properties_individually(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Insere propriedades individualmente como fallback
+    """
+    successful = 0
+    failed = 0
+
+    for item in items:
+        try:
+            table.put_item(Item=item)
+            successful += 1
+        except Exception as e:
+            logger.error(f"Erro ao inserir propriedade {item.get('name')}: {str(e)}")
+            failed += 1
+
+    return {"successful": successful, "failed": failed}
+
+
 def generate_pdf_report(event: Dict[str, Any], user_id: str) -> Dict[str, Any]:
     """
     Gera relatório PDF das propriedades selecionadas
@@ -89,7 +245,9 @@ def generate_pdf_report(event: Dict[str, Any], user_id: str) -> Dict[str, Any]:
 
         property_ids = body.get("propertyIds", [])
         if not property_ids:
-            return create_response(400, {"error": "Lista de propriedades é obrigatória"})
+            return create_response(
+                400, {"error": "Lista de propriedades é obrigatória"}
+            )
 
         # Buscar propriedades do usuário
         properties = []
@@ -103,14 +261,17 @@ def generate_pdf_report(event: Dict[str, Any], user_id: str) -> Dict[str, Any]:
 
         # Gerar PDF
         pdf_result = create_pdf_report(properties, user_id)
-        
+
         if pdf_result["success"]:
-            return create_response(200, {
-                "message": "Relatório gerado com sucesso",
-                "pdf": pdf_result["pdf_base64"],
-                "filename": pdf_result["filename"],
-                "properties_count": len(properties)
-            })
+            return create_response(
+                200,
+                {
+                    "message": "Relatório gerado com sucesso",
+                    "pdf": pdf_result["pdf_base64"],
+                    "filename": pdf_result["filename"],
+                    "properties_count": len(properties),
+                },
+            )
         else:
             return create_response(500, {"error": pdf_result["message"]})
 
@@ -126,7 +287,7 @@ def create_pdf_report(properties: List[Dict[str, Any]], user_id: str) -> Dict[st
     try:
         # Buffer para o PDF
         buffer = BytesIO()
-        
+
         # Configurar documento
         doc = SimpleDocTemplate(
             buffer,
@@ -134,194 +295,222 @@ def create_pdf_report(properties: List[Dict[str, Any]], user_id: str) -> Dict[st
             rightMargin=72,
             leftMargin=72,
             topMargin=72,
-            bottomMargin=18
+            bottomMargin=18,
         )
-        
+
         # Estilos
         styles = getSampleStyleSheet()
         title_style = ParagraphStyle(
-            'CustomTitle',
-            parent=styles['Heading1'],
+            "CustomTitle",
+            parent=styles["Heading1"],
             fontSize=18,
             spaceAfter=30,
-            textColor=colors.HexColor('#7c3aed'),
-            alignment=1  # Centralizado
+            textColor=colors.HexColor("#7c3aed"),
+            alignment=1,  # Centralizado
         )
-        
+
         subtitle_style = ParagraphStyle(
-            'Subtitle',
-            parent=styles['Normal'],
+            "Subtitle",
+            parent=styles["Normal"],
             fontSize=12,
             spaceAfter=20,
-            textColor=colors.HexColor('#4b5563'),
-            alignment=1
+            textColor=colors.HexColor("#4b5563"),
+            alignment=1,
         )
-        
+
         # Conteúdo do PDF
         story = []
-        
+
         # Título
         story.append(Paragraph("Relatório de Propriedades Rurais", title_style))
-        
+
         # Data
         current_date = datetime.now(timezone.utc)
         formatted_date = current_date.strftime("%d de %B de %Y às %H:%M UTC")
         story.append(Paragraph(f"Gerado em: {formatted_date}", subtitle_style))
         story.append(Spacer(1, 20))
-        
+
         # Resumo executivo
-        story.append(Paragraph("<b>RESUMO EXECUTIVO</b>", styles['Heading2']))
+        story.append(Paragraph("<b>RESUMO EXECUTIVO</b>", styles["Heading2"]))
         story.append(Spacer(1, 12))
-        
-        total_area = sum(p.get('area', 0) for p in properties)
-        total_perimeter = sum(p.get('perimeter', 0) for p in properties)
+
+        total_area = sum(p.get("area", 0) for p in properties)
+        total_perimeter = sum(p.get("perimeter", 0) for p in properties)
         avg_area = total_area / len(properties) if properties else 0
-        
+
         summary_data = [
             f"<b>Total de propriedades:</b> {len(properties)}",
             f"<b>Área total:</b> {total_area:.2f} hectares",
             f"<b>Perímetro total:</b> {total_perimeter/1000:.2f} km",
-            f"<b>Área média:</b> {avg_area:.2f} hectares por propriedade"
+            f"<b>Área média:</b> {avg_area:.2f} hectares por propriedade",
         ]
-        
+
         for item in summary_data:
-            story.append(Paragraph(f"• {item}", styles['Normal']))
+            story.append(Paragraph(f"• {item}", styles["Normal"]))
             story.append(Spacer(1, 6))
-        
+
         story.append(Spacer(1, 20))
-        
+
         # Distribuição por tipo
         type_counts = {}
         for prop in properties:
-            prop_type = prop.get('type', 'outros').capitalize()
+            prop_type = prop.get("type", "outros").capitalize()
             type_counts[prop_type] = type_counts.get(prop_type, 0) + 1
-        
-        story.append(Paragraph("<b>DISTRIBUIÇÃO POR TIPO</b>", styles['Heading2']))
+
+        story.append(Paragraph("<b>DISTRIBUIÇÃO POR TIPO</b>", styles["Heading2"]))
         story.append(Spacer(1, 12))
-        
+
         for prop_type, count in type_counts.items():
             percentage = (count / len(properties)) * 100
-            story.append(Paragraph(f"• <b>{prop_type}:</b> {count} propriedade(s) ({percentage:.1f}%)", styles['Normal']))
-        
+            story.append(
+                Paragraph(
+                    f"• <b>{prop_type}:</b> {count} propriedade(s) ({percentage:.1f}%)",
+                    styles["Normal"],
+                )
+            )
+
         story.append(Spacer(1, 20))
-        
+
         # Tabela de propriedades
-        story.append(Paragraph("<b>PROPRIEDADES DETALHADAS</b>", styles['Heading2']))
+        story.append(Paragraph("<b>PROPRIEDADES DETALHADAS</b>", styles["Heading2"]))
         story.append(Spacer(1, 12))
-        
+
         # Dados da tabela
-        table_data = [['Nome da Propriedade', 'Tipo', 'Área (ha)', 'Perímetro (m)', 'Data Criação']]
-        
+        table_data = [
+            [
+                "Nome da Propriedade",
+                "Tipo",
+                "Área (ha)",
+                "Perímetro (m)",
+                "Data Criação",
+            ]
+        ]
+
         for prop in properties:
-            created_date = prop.get('createdAt', '')
+            created_date = prop.get("createdAt", "")
             if created_date:
                 try:
-                    date_obj = datetime.fromisoformat(created_date.replace('Z', '+00:00'))
-                    formatted_created = date_obj.strftime('%d/%m/%Y')
+                    date_obj = datetime.fromisoformat(
+                        created_date.replace("Z", "+00:00")
+                    )
+                    formatted_created = date_obj.strftime("%d/%m/%Y")
                 except:
-                    formatted_created = 'N/A'
+                    formatted_created = "N/A"
             else:
-                formatted_created = 'N/A'
-                
+                formatted_created = "N/A"
+
             # Truncar nome se muito longo
-            name = prop.get('name', '')
+            name = prop.get("name", "")
             if len(name) > 30:
-                name = name[:27] + '...'
-                
-            table_data.append([
-                name,
-                prop.get('type', '').capitalize(),
-                f"{prop.get('area', 0):.2f}",
-                f"{prop.get('perimeter', 0):.0f}",
-                formatted_created
-            ])
-        
+                name = name[:27] + "..."
+
+            table_data.append(
+                [
+                    name,
+                    prop.get("type", "").capitalize(),
+                    f"{prop.get('area', 0):.2f}",
+                    f"{prop.get('perimeter', 0):.0f}",
+                    formatted_created,
+                ]
+            )
+
         # Criar tabela
-        table = Table(table_data, colWidths=[2.5*inch, 1*inch, 0.8*inch, 1*inch, 1*inch])
-        table.setStyle(TableStyle([
-            # Header
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#7c3aed')),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 9),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-            
-            # Body
-            ('BACKGROUND', (0, 1), (-1, -1), colors.white),
-            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-            ('FONTSIZE', (0, 1), (-1, -1), 8),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f9fafb')]),
-        ]))
-        
+        table = Table(
+            table_data, colWidths=[2.5 * inch, 1 * inch, 0.8 * inch, 1 * inch, 1 * inch]
+        )
+        table.setStyle(
+            TableStyle(
+                [
+                    # Header
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#7c3aed")),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("FONTSIZE", (0, 0), (-1, 0), 9),
+                    ("BOTTOMPADDING", (0, 0), (-1, 0), 12),
+                    # Body
+                    ("BACKGROUND", (0, 1), (-1, -1), colors.white),
+                    ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
+                    ("FONTSIZE", (0, 1), (-1, -1), 8),
+                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    (
+                        "ROWBACKGROUNDS",
+                        (0, 1),
+                        (-1, -1),
+                        [colors.white, colors.HexColor("#f9fafb")],
+                    ),
+                ]
+            )
+        )
+
         story.append(table)
-        
+
         # Estatísticas adicionais
         if len(properties) > 1:
             story.append(Spacer(1, 30))
-            story.append(Paragraph("<b>ESTATÍSTICAS ADICIONAIS</b>", styles['Heading2']))
+            story.append(
+                Paragraph("<b>ESTATÍSTICAS ADICIONAIS</b>", styles["Heading2"])
+            )
             story.append(Spacer(1, 12))
-            
-            areas = [p.get('area', 0) for p in properties if p.get('area', 0) > 0]
+
+            areas = [p.get("area", 0) for p in properties if p.get("area", 0) > 0]
             if areas:
                 largest_area = max(areas)
                 smallest_area = min(areas)
-                
-                largest_prop = next(p for p in properties if p.get('area') == largest_area)
-                smallest_prop = next(p for p in properties if p.get('area') == smallest_area)
-                
+
+                largest_prop = next(
+                    p for p in properties if p.get("area") == largest_area
+                )
+                smallest_prop = next(
+                    p for p in properties if p.get("area") == smallest_area
+                )
+
                 stats_data = [
                     f"• <b>Maior propriedade:</b> {largest_prop.get('name')} - {largest_area:.2f} ha",
                     f"• <b>Menor propriedade:</b> {smallest_prop.get('name')} - {smallest_area:.2f} ha",
-                    f"• <b>Diferença:</b> {largest_area - smallest_area:.2f} ha"
+                    f"• <b>Diferença:</b> {largest_area - smallest_area:.2f} ha",
                 ]
-                
+
                 for stat in stats_data:
-                    story.append(Paragraph(stat, styles['Normal']))
+                    story.append(Paragraph(stat, styles["Normal"]))
                     story.append(Spacer(1, 6))
-        
+
         # Rodapé informativo
         story.append(Spacer(1, 30))
         footer_style = ParagraphStyle(
-            'Footer',
-            parent=styles['Normal'],
+            "Footer",
+            parent=styles["Normal"],
             fontSize=8,
-            textColor=colors.HexColor('#6b7280'),
-            alignment=1
+            textColor=colors.HexColor("#6b7280"),
+            alignment=1,
         )
-        story.append(Paragraph(
-            "Sistema Rural - Desenvolvido por Lucas Bruzzone, Cientista de Dados<br/>"
-            "Relatório gerado automaticamente via AWS Lambda", 
-            footer_style
-        ))
-        
+        story.append(
+            Paragraph(
+                "Sistema Rural - Desenvolvido por Lucas Bruzzone, Cientista de Dados<br/>"
+                "Relatório gerado automaticamente via AWS Lambda",
+                footer_style,
+            )
+        )
+
         # Construir PDF
         doc.build(story)
-        
+
         # Converter para base64
         pdf_bytes = buffer.getvalue()
         buffer.close()
-        
-        pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
-        
+
+        pdf_base64 = base64.b64encode(pdf_bytes).decode("utf-8")
+
         # Nome do arquivo
         timestamp = current_date.strftime("%Y%m%d_%H%M%S")
         filename = f"relatorio_propriedades_{timestamp}.pdf"
-        
-        return {
-            "success": True,
-            "pdf_base64": pdf_base64,
-            "filename": filename
-        }
-        
+
+        return {"success": True, "pdf_base64": pdf_base64, "filename": filename}
+
     except Exception as e:
         logger.error(f"Erro ao criar PDF: {str(e)}")
-        return {
-            "success": False,
-            "message": f"Erro ao criar PDF: {str(e)}"
-        }
+        return {"success": False, "message": f"Erro ao criar PDF: {str(e)}"}
 
 
 def create_property(event: Dict[str, Any], user_id: str) -> Dict[str, Any]:
