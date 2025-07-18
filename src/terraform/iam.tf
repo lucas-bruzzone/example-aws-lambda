@@ -50,3 +50,22 @@ resource "aws_iam_role_policy" "lambda_dynamodb" {
     ]
   })
 }
+
+# Policy para EventBridge
+resource "aws_iam_role_policy" "lambda_eventbridge" {
+  name = "${var.project_name}-lambda-eventbridge-policy"
+  role = aws_iam_role.lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "events:PutEvents"
+        ]
+        Resource = data.terraform_remote_state.analysis_infra.outputs.property_analysis_bus_arn
+      }
+    ]
+  })
+}
