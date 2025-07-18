@@ -21,8 +21,12 @@ from reportlab.lib.units import inch
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# Inicializar DynamoDB
 dynamodb = boto3.resource("dynamodb")
+eventbridge = boto3.client("events")
+
+# Adicionar variáveis de ambiente
+ANALYSIS_TABLE = os.environ.get("PROPERTY_ANALYSIS_TABLE", "")
+EVENTBRIDGE_BUS = os.environ.get("EVENTBRIDGE_BUS_NAME", "")
 table_name = os.environ.get("PROPERTIES_TABLE", "properties")
 table = dynamodb.Table(table_name)
 
@@ -32,22 +36,23 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     Router principal para todas as operações CRUD de propriedades
     """
     try:
-        # Log do evento recebido
         method = event.get("httpMethod", "")
         path = event.get("path", "")
         resource = event.get("resource", "")
 
         logger.info(f"Evento recebido: {method} {path}")
 
-        # Extrair user ID do token JWT para todas as operações
         user_id = extract_user_id(event)
         if not user_id:
             return create_response(
                 401, {"error": "Token inválido ou usuário não identificado"}
             )
 
-        # Router baseado no método HTTP e path
-        if method == "POST" and "/properties/report" in resource:
+        # Router com nova rota
+        if method == "GET" and "/properties/{id}/analysis" in resource:
+            return get_property_analysis(event, user_id)
+
+        elif method == "POST" and "/properties/report" in resource:
             return generate_pdf_report(event, user_id)
 
         elif method == "POST" and "/properties/import" in resource:
@@ -66,7 +71,6 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             return delete_property(event, user_id)
 
         elif method == "OPTIONS":
-            # Resposta para CORS preflight
             return create_response(200, {"message": "CORS preflight"})
 
         else:
@@ -515,7 +519,7 @@ def create_pdf_report(properties: List[Dict[str, Any]], user_id: str) -> Dict[st
 
 def create_property(event: Dict[str, Any], user_id: str) -> Dict[str, Any]:
     """
-    Cria uma nova propriedade
+    Cria uma nova propriedade e publica evento
     """
     try:
         # Parse do body
@@ -546,12 +550,19 @@ def create_property(event: Dict[str, Any], user_id: str) -> Dict[str, Any]:
             "area": Decimal(str(body["area"])),
             "perimeter": Decimal(str(body["perimeter"])),
             "coordinates": convert_coordinates_to_decimal(body["coordinates"]),
+            "analysisStatus": "pending",  # Novo campo
             "createdAt": current_time,
             "updatedAt": current_time,
         }
 
         # Salvar no DynamoDB
         table.put_item(Item=property_item)
+
+        # Publicar evento para análise geoespacial
+        try:
+            publish_property_created_event(property_id, body["coordinates"], user_id)
+        except Exception as e:
+            logger.warning(f"Erro ao publicar evento: {str(e)}")
 
         logger.info(
             f"Propriedade criada com sucesso: {property_id} para usuário {user_id[:8]}..."
@@ -1005,9 +1016,103 @@ def format_property_for_response(property_item: Dict[str, Any]) -> Dict[str, Any
         "coordinates": convert_coordinates_to_float(
             property_item.get("coordinates", [])
         ),
+        "analysisStatus": property_item.get("analysisStatus", "pending"),  # Novo campo
         "createdAt": property_item.get("createdAt"),
         "updatedAt": property_item.get("updatedAt"),
     }
+
+
+# Nova função para publicar evento
+def publish_property_created_event(property_id: str, coordinates: list, user_id: str):
+    """
+    Publica evento de propriedade criada para EventBridge
+    """
+    if not EVENTBRIDGE_BUS:
+        logger.warning("EventBridge bus não configurado")
+        return
+
+    try:
+        eventbridge.put_events(
+            Entries=[
+                {
+                    "Source": "property.service",
+                    "DetailType": "Property Created",
+                    "Detail": json.dumps(
+                        {
+                            "propertyId": property_id,
+                            "coordinates": coordinates,
+                            "userId": user_id,
+                            "status": "created",
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        }
+                    ),
+                    "EventBusName": EVENTBRIDGE_BUS,
+                }
+            ]
+        )
+        logger.info(f"Evento publicado para propriedade: {property_id}")
+    except Exception as e:
+        logger.error(f"Erro ao publicar evento: {str(e)}")
+        raise
+
+
+# Nova função para buscar análise
+def get_property_analysis(event: Dict[str, Any], user_id: str) -> Dict[str, Any]:
+    """
+    Retorna análise geoespacial de uma propriedade
+    """
+    try:
+        # Extrair property ID da URL
+        path_parameters = event.get("pathParameters") or {}
+        property_id = path_parameters.get("id")
+
+        if not property_id:
+            return create_response(400, {"error": "ID da propriedade é obrigatório"})
+
+        # Verificar se a propriedade existe e pertence ao usuário
+        existing_property = get_existing_property(user_id, property_id)
+        if not existing_property:
+            return create_response(404, {"error": "Propriedade não encontrada"})
+
+        # Buscar análise na tabela de análises
+        analysis_result = get_analysis_data(property_id)
+
+        return create_response(
+            200, {"propertyId": property_id, "analysis": analysis_result}
+        )
+
+    except Exception as e:
+        logger.error(f"Erro ao buscar análise: {str(e)}")
+        return create_response(500, {"error": "Erro interno do servidor"})
+
+
+# Função auxiliar para buscar análise
+def get_analysis_data(property_id: str) -> Dict[str, Any]:
+    """
+    Busca dados de análise no DynamoDB
+    """
+    if not ANALYSIS_TABLE:
+        return {
+            "status": "not_configured",
+            "message": "Sistema de análise não configurado",
+        }
+
+    try:
+        analysis_table = dynamodb.Table(ANALYSIS_TABLE)
+        response = analysis_table.get_item(Key={"propertyId": property_id})
+
+        if "Item" in response:
+            item = response["Item"]
+
+            # Converter Decimal para float
+            analysis_data = json.loads(json.dumps(item, default=str))
+            return analysis_data
+        else:
+            return {"status": "pending", "message": "Análise em processamento"}
+
+    except Exception as e:
+        logger.error(f"Erro ao buscar análise: {str(e)}")
+        return {"status": "error", "message": "Erro ao buscar análise"}
 
 
 # ============================================================================

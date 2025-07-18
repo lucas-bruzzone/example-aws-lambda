@@ -14,8 +14,10 @@ module "lambda_function" {
   lambda_role = aws_iam_role.lambda.arn
 
   environment_variables = {
-    PROPERTIES_TABLE = data.terraform_remote_state.dynamoDB.outputs.table_name
-    ENVIRONMENT      = var.environment
+    PROPERTIES_TABLE        = data.terraform_remote_state.dynamoDB.outputs.table_name
+    PROPERTY_ANALYSIS_TABLE = data.terraform_remote_state.analysis_infra.outputs.property_analysis_table_name
+    EVENTBRIDGE_BUS_NAME    = data.terraform_remote_state.analysis_infra.outputs.property_analysis_bus_name
+    ENVIRONMENT             = var.environment
   }
 
   depends_on = [module.lambda_layer]
@@ -24,7 +26,6 @@ module "lambda_function" {
     Name = "${var.project_name}-lambda"
   }
 }
-
 
 module "lambda_layer" {
   source          = "terraform-aws-modules/lambda/aws"
@@ -35,17 +36,17 @@ module "lambda_layer" {
   layer_name          = "${var.project_name}-python-layer"
   description         = "${var.project_name} python layer"
   compatible_runtimes = ["python3.11"]
-  runtime             = "python3.11" # Adicionar esta linha
+  runtime             = "python3.11"
 
   source_path = [
     {
       path             = "../lambda-layer"
-      pip_requirements = true # Mudança aqui - sem path
+      pip_requirements = true
       prefix_in_zip    = "python"
     }
   ]
 
-  store_on_s3 = false # Adicionar esta linha
+  store_on_s3 = false
 
   tags = {
     Name = "${var.project_name}-layer"

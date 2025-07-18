@@ -16,3 +16,13 @@ data "terraform_remote_state" "dynamoDB" {
     region = "us-east-1"
   }
 }
+
+# Data source para infraestrutura de análise
+data "terraform_remote_state" "analysis_infra" {
+  backend = "s3"
+  config = {
+    bucket = "example-aws-terraform-terraform-state"
+    key    = "example-aws-property-analysis-infra/terraform.tfstate"
+    region = "us-east-1"
+  }
+}
