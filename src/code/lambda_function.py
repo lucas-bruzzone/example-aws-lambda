@@ -17,6 +17,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.units import inch
 
 
+
 # Configurar logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -515,6 +516,7 @@ def create_pdf_report(properties: List[Dict[str, Any]], user_id: str) -> Dict[st
     except Exception as e:
         logger.error(f"Erro ao criar PDF: {str(e)}")
         return {"success": False, "message": f"Erro ao criar PDF: {str(e)}"}
+
 
 
 def create_property(event: Dict[str, Any], user_id: str) -> Dict[str, Any]:
